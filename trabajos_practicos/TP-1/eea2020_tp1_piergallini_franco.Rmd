@@ -3,70 +3,654 @@ title: "TP 1 - Franco Piergallini Guida"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
-
 ```{r}
 library(tidyverse)
 library(lubridate)
+library(GGally)
+library(tidyverse)
+
+library(corrplot)
+library(ggplot2)
+library(ggthemes)
+
+library(tidymodels)
+library(rsample)
+
+library(caret)
+library(robustbase)
+library(broom)
 ```
 
 ```{r}
-ar_properties = read.csv('ar_properties.csv')
+EMSE_df = read.csv('encuesta_salud_train.csv')
+```
+# Análisis exploratorios
+# ¿Qué puede mencionar sobre su estructura y variables?
+```{r}
+glimpse(EMSE_df)
 ```
 
-```{r}
-glimpse(ar_properties)
-```
+El set de datos contiene 7024 observaciones, cada una de ellas tiene 16 características o variables.
+9 variables de texto del tipo chr
+7 variables numéricas del tipo int y dbl.
 
 ```{r}
-table(ar_properties$l1)
-```
-```{r}
-table(ar_properties$l2)
-```
-
-
-```{r}
-table(ar_properties$currency)
-```
-```{r}
-table(ar_properties$property_type)
-```
-```{r}
-table(ar_properties$operation_type)
+table(EMSE_df$consumo_semanal_frutas)
 ```
 
 
 ```{r}
-ar_properties = ar_properties %>%
-  filter(l1 == "Argentina",
-         l2 == "Capital Federal",
-         currency == "USD",
-         property_type == "Casa" |
-           property_type == "Departamento" | 
-           property_type == "PH",
-         operation_type == "Venta")
+EMSE_df[rowSums(EMSE_df == 'Dato perdido') != 0, , drop = FALSE]
+```
+```{r}
+nrow(EMSE_df[rowSums(EMSE_df == 'Dato perdido') != 0, , drop = FALSE])/nrow(EMSE_df)*100
+```
+Casi 4% de las entradas del set de datos contienen por lo menos 1 dato perdido.
+
+
+## ¿Cómo es la correlación entre las variables numéricas?
+```{r}
+corrplot(cor(select_if(EMSE_df, is.numeric), method='spearman'),
+         method = "square",
+         type = "full",
+         diag = TRUE,
+         tl.col = "black",
+         bg = "white",
+         title = "Correlaciones de variables numericas",
+         col = NULL)
+```
+```{r}
+EMSE_femenino = EMSE_df %>%
+  filter(genero == "Femenino")
+  corrplot(cor(select_if(EMSE_df, is.numeric), method = "spearman"),
+           method = "square",
+           type = "full",
+           diag = TRUE,
+           tl.col = "black",
+           bg = "white",
+           title = "Correlaciones de variables numericas genero=femenina",
+           col = NULL)
+```
+```{r}
+
+EMSE_masculino = EMSE_df %>%
+  filter(genero == "Masculino")
+corrplot(cor(select_if(EMSE_df, is.numeric), method='spearman'),
+         method = "square",
+         type = "full",
+         diag = TRUE,
+         tl.col = "black",
+         bg = "white",
+         title = "Correlaciones de variables numericas genero=masculino",
+         col = NULL)
+```
+No se aprecian diferencias entre las correlaciones de las variables numéricas agrupadas por género.
+En ambas, se puede ver que el peso está positivamente correlacionado con la altura y la edad.
+La correlación univariada del peso con respecto a las otras variables es despreciable.
+
+## Para las categorías de la variable frecuencia de hambre mensual, analice gráficamente la distribución en términos de frecuencia relativa de:
+## a) El consumo semanal de verdura.
+## b) El consumo semanal de comida grasa.
+## ¿Cuáles son las principales características que observa en estos gráficos?
+
+```{r}
+table(EMSE_df$frecuencia_hambre_mensual)
+```
+```{r}
+table(EMSE_df$consumo_semanal_verdura)
+```
+```{r}
+table(EMSE_df$consumo_semanal_comida_grasa)
+```
+```{r}
+EMSE_df %>%
+  select(frecuencia_hambre_mensual, consumo_semanal_verdura) %>%
+  table() %>%
+  as.data.frame() %>%
+  ggplot(., aes(y=frecuencia_hambre_mensual, fill=consumo_semanal_verdura,
+                      x=Freq)
+         ) +
+  ggtitle("Frecuencia de hambre mensual y \nconsumo semanal de verduras") +
+  geom_bar(position='stack', stat='identity') +
+  theme_wsj(base_size = 5.5)
 ```
 
 ```{r}
-ar_properties = ar_properties %>%
-  select(c("id", "l3", "rooms", "bedrooms", "bathrooms", "surface_total", 
-           "surface_covered", "price", "property_type"))
+EMSE_df %>%
+  select(frecuencia_hambre_mensual, consumo_semanal_comida_grasa) %>%
+  table() %>%
+  as.data.frame() %>%
+  ggplot(., aes(y=frecuencia_hambre_mensual, fill=consumo_semanal_comida_grasa,
+                      x=Freq),
+         ) +
+  ggtitle("Frecuencia de hambre mensual y \nconsumo semanal de comida grasa") +
+  geom_bar(position='stack', stat='identity') +
+  theme_wsj(base_size = 5.5)
+```
+
+
+Se puede observar, claramente, que el consumo de comida grasa es muy bajo, ya que la gran mayoría o no consumió comida grasa
+en los ultimos 7 días o lo hizo de 1 a 3 veces.
+
+# Modelo inicial
+```{r}
+glimpse(EMSE_df)
+```
+## Se plantea que una primera alternativa para modelar el peso es: 
+## E(peso) = β0+β1altura+β2edad+β3genero+β4diasActividadF isicaSemanal+β5consumoDiarioAlcohol
+
+## ¿Cuál es la interpretación de cada uno de los coeficientes estimados?
+
+```{r}
+modelo_peso = lm(formula=peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+                 data = EMSE_df)
+
+tidy_modelo_peso = tidy(modelo_peso, conf.int=TRUE)
+
+tidy_modelo_peso
+```
+
+
+El valor $\hat{\beta_{0}}$ = -68.92 es el peso esperado para cuando todos los otros valores sean 0. Esto no tiene interpretación: una persona no puede tener altura 0, por ejemplo.
+
+Por otro lado, $\hat{\beta_{1}}$ = 0.65, nos indica que por cada unidad de altura el peso aumenta 0.65 unidades de peso. Lo mismo para la edad $\hat{\beta_{2}}$ = 1.40 indicando que por cada unidad de la variable edad el peso aumenta 1.40 unidades de peso.
+
+## ¿Son significativos?
+```{r}
+options("scipen"=1)
+tidy_modelo_peso %>%
+  select(term, statistic, p.value, conf.low, conf.high)
+```
+
+
+Podemos ver que en este modelo todas las variables, excepto consumo_diario_alcohol, tienen un p.value < 0.05 y por lo tanto son estadísticamente significativas para explicar el peso. Sin embargo, podemos apreciar que en los intervalos de confianza de la variable dias_actividad_fisica_semanal contienen el valor 0, por ende no serían estadísticamente significativas.
+
+```{r}
+summary(modelo_peso)
+```
+## ¿El modelo resulta significativo para explicar el peso?
+## ¿Qué porcentaje de la variabilidad explica el modelo?
+
+El modelo resulta significativo para explicar el peso en función de las variables ya que obtenemos un p-value < 0.05 en el test de significatividad global. La variabilidad explicada por el modelo es relativamente baja, mirando el $R^{2}$ apreciamos que es sólo del 35%.
+
+
+# Modelo categóricas
+
+## Se sugiere probar un modelo que incopore el consumo semanal de snacks y una interacción entre el género y la edad, en lugar de actividad física y consumo de alcohol:
+## E(peso) = β0 + β1altura + β2edad + β3genero + β4consumoSemanalSnacks + β5genero · edad
+
+## Además se pide explícitamente que la categoría “No comí comida salada o snacks en los últimos 7 días” de la variable consumoSemanalSnacks se encuentre como nivel/categoría basal.
+
+## ¿Cuál es la interpretación de los coeficientes estimados para las categorías de consumoSemanalSnacks y genero . edad? ¿Son significativas?
+```{r}
+EMSE_df[EMSE_df$consumo_semanal_snacks == "No comí comida salada o snacks en los últimos 7 días", "consumo_semanal_snacks"] = "basal"
+
+modelo_peso_2 = lm(formula=peso ~ altura + edad + genero + consumo_semanal_snacks + genero*edad,
+                   data = EMSE_df)
+
+tidy_modelo_peso_2 = tidy(modelo_peso_2, conf.int=TRUE)
+
+tidy_modelo_peso_2
+```
+Las unicas categorias que son estadisticamente significativas son: basal y 4 a 6 veces durante los últimos 7 días.
+
+## ¿Qué porcentaje de la variabilidad explica el modelo?
+
+```{r}
+summary(modelo_peso_2)
+```
+El porcentaje de variabilidad explicada por el modelo es prácticamente el mismo para el anterior, 35.8% de variabilidad explicada.
+
+```{r}
+anova(modelo_peso_2)
+```
+El test de anova para la variable consumo_semanal_snacks en conjunto resulta estadísticamente significante para explicar el peso.
+
+
+# Modelos propios y evaluación
+
+## Generación de variables
+
+## Eliminamos registros con datos perdidos.
+```{r}
+df_train = EMSE_df
+df_train = df_train %>%
+  filter(frecuencia_hambre_mensual != "Dato perdido",
+         nivel_educativo != "Dato perdido",
+         consumo_semanal_frutas != "Dato perdido",
+         consumo_semanal_verdura != "Dato perdido",
+         consumo_semanal_comida_grasa != "Dato perdido",
+         consumo_semanal_gaseosas != "Dato perdido",
+         consumo_semanal_snacks != "Dato perdido")
+```
+
+
+
+
+```{r}
+df_train[df_train$frecuencia_hambre_mensual == "Nunca", "frecuencia_hambre_mensual"] = 1
+df_train[df_train$frecuencia_hambre_mensual == "Rara vez", "frecuencia_hambre_mensual"] = 2
+df_train[df_train$frecuencia_hambre_mensual == "Algunas veces", "frecuencia_hambre_mensual"] = 3
+df_train[df_train$frecuencia_hambre_mensual == "Casi siempre", "frecuencia_hambre_mensual"] = 4
+df_train[df_train$frecuencia_hambre_mensual == "Siempre", "frecuencia_hambre_mensual"] = 5
+```
+
+## Variable años consumiendo alcohol
+```{r}
+df_train[df_train$edad_consumo_alcohol == '10 o 11 años', 'tiempo_consumiendo_alcohol'] = df_train[df_train$edad_consumo_alcohol == '10 o 11 años', 'edad'] - 10.5
+df_train[df_train$edad_consumo_alcohol == '12 o 13 años', 'tiempo_consumiendo_alcohol'] = df_train[df_train$edad_consumo_alcohol == '12 o 13 años', 'edad'] - 12.5
+df_train[df_train$edad_consumo_alcohol == '14 o 15 años', 'tiempo_consumiendo_alcohol'] = df_train[df_train$edad_consumo_alcohol == '14 o 15 años', 'edad'] - 14.5
+df_train[df_train$edad_consumo_alcohol == '16 o 17 años', 'tiempo_consumiendo_alcohol'] = df_train[df_train$edad_consumo_alcohol == '16 o 17 años', 'edad'] - 16.5
+df_train[df_train$edad_consumo_alcohol == '7 años o menos', 'tiempo_consumiendo_alcohol'] = df_train[df_train$edad_consumo_alcohol == '7 años o menos', 'edad'] - 3.5
+df_train[df_train$edad_consumo_alcohol == '8 o 9 años', 'tiempo_consumiendo_alcohol'] = df_train[df_train$edad_consumo_alcohol == '8 o 9 años', 'edad'] - 8.5
+df_train[df_train$edad_consumo_alcohol == 'Nunca tomé alcohol más que unos pocos sorbos', 'tiempo_consumiendo_alcohol'] = 1
 ```
 
 ```{r}
-glimpse(ar_properties)
+df_train <- subset(df_train, select = -c(edad_consumo_alcohol, record))
+```
+
+```{r}
+df_train[df_train$nivel_educativo == '8vo grado nivel Primario/Polimodal  o 1er año nivel Secundario', 'nivel_educativo'] = 1
+df_train[df_train$nivel_educativo == '9no grado nivel Primario/Polimodal o 2do año nivel Secundario', 'nivel_educativo'] = 2
+df_train[df_train$nivel_educativo == '1er año/10mo grado nivel Polimodal o 3er año nivel Secundario', 'nivel_educativo'] = 3
+df_train[df_train$nivel_educativo == '2do año/11vo grado nivel Polimodal o 4to año nivel Secundario', 'nivel_educativo'] = 4
+df_train[df_train$nivel_educativo == '3er año/12vo grado nivel Polimodal o 5to año nivel Secundario', 'nivel_educativo'] = 5
+```
+
+```{r}
+df_train[df_train$consumo_semanal_frutas == 'No comí frutas durante los últimos 7 días', 'consumo_semanal_frutas'] = 1
+df_train[df_train$consumo_semanal_frutas == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_frutas'] = 2
+df_train[df_train$consumo_semanal_frutas == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_frutas'] = 3
+df_train[df_train$consumo_semanal_frutas == '1 vez al día', 'consumo_semanal_frutas'] = 4
+df_train[df_train$consumo_semanal_frutas == '2 veces al día', 'consumo_semanal_frutas'] = 5
+df_train[df_train$consumo_semanal_frutas == '3 veces al día', 'consumo_semanal_frutas'] = 6
+df_train[df_train$consumo_semanal_frutas == '4 o más veces al día', 'consumo_semanal_frutas'] = 7
+```
+
+```{r}
+df_train[df_train$consumo_semanal_verdura == 'No comí verduras ni hortalizas durante los últimos 7 días', 'consumo_semanal_verdura'] = 1
+df_train[df_train$consumo_semanal_verdura == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_verdura'] = 2
+df_train[df_train$consumo_semanal_verdura == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_verdura'] = 3
+df_train[df_train$consumo_semanal_verdura == '1 vez al día', 'consumo_semanal_verdura'] = 4
+df_train[df_train$consumo_semanal_verdura == '2 veces al día', 'consumo_semanal_verdura'] = 5
+df_train[df_train$consumo_semanal_verdura == '3 veces al día', 'consumo_semanal_verdura'] = 6
+df_train[df_train$consumo_semanal_verdura == '4 o más veces al día', 'consumo_semanal_verdura'] = 7
+```
+
+```{r}
+df_train[df_train$consumo_semanal_comida_grasa == 'No comí comida alta en grasa en los últimos 7 días', 'consumo_semanal_comida_grasa'] = 1
+df_train[df_train$consumo_semanal_comida_grasa == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_comida_grasa'] = 2
+df_train[df_train$consumo_semanal_comida_grasa == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_comida_grasa'] = 3
+df_train[df_train$consumo_semanal_comida_grasa == '1 vez al día', 'consumo_semanal_comida_grasa'] = 4
+df_train[df_train$consumo_semanal_comida_grasa == '2 veces al día', 'consumo_semanal_comida_grasa'] = 5
+df_train[df_train$consumo_semanal_comida_grasa == '3 veces al día', 'consumo_semanal_comida_grasa'] = 6
+df_train[df_train$consumo_semanal_comida_grasa == '4 o más veces al día', 'consumo_semanal_comida_grasa'] = 7
+```
+
+```{r}
+df_train[df_train$consumo_semanal_gaseosas == 'No tomé gaseosas en los últimos 7 días', 'consumo_semanal_gaseosas'] = 1
+df_train[df_train$consumo_semanal_gaseosas == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_gaseosas'] = 2
+df_train[df_train$consumo_semanal_gaseosas == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_gaseosas'] = 3
+df_train[df_train$consumo_semanal_gaseosas == '1 vez al día', 'consumo_semanal_gaseosas'] = 4
+df_train[df_train$consumo_semanal_gaseosas == '2 veces al día', 'consumo_semanal_gaseosas'] = 5
+df_train[df_train$consumo_semanal_gaseosas == '3 veces al día', 'consumo_semanal_gaseosas'] = 6
+df_train[df_train$consumo_semanal_gaseosas == '4 o más veces al día', 'consumo_semanal_gaseosas'] = 7
 ```
 
 ```{r}
 
+df_train[df_train$consumo_semanal_snacks == 'basal', 'consumo_semanal_snacks_num'] = 1
+df_train[df_train$consumo_semanal_snacks == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_snacks_num'] = 2
+df_train[df_train$consumo_semanal_snacks == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_snacks_num'] = 3
+df_train[df_train$consumo_semanal_snacks == '1 vez al día', 'consumo_semanal_snacks_num'] = 4
+df_train[df_train$consumo_semanal_snacks == '2 veces al día', 'consumo_semanal_snacks_num'] = 5
+df_train[df_train$consumo_semanal_snacks == '3 veces al día', 'consumo_semanal_snacks_num'] = 6
+df_train[df_train$consumo_semanal_snacks == '4 o más veces al día', 'consumo_semanal_snacks_num'] = 7
+
+df_train <- subset(df_train, select = -c(consumo_semanal_snacks))
+```
+
+```{r}
+df_train$nivel_educativo = as.integer(df_train$nivel_educativo)
+df_train$frecuencia_hambre_mensual = as.integer(df_train$frecuencia_hambre_mensual)
+df_train$consumo_semanal_frutas = as.integer(df_train$consumo_semanal_frutas)
+df_train$consumo_semanal_verdura = as.integer(df_train$consumo_semanal_verdura)
+df_train$consumo_semanal_gaseosas = as.integer(df_train$consumo_semanal_gaseosas)
+df_train$consumo_semanal_snacks_num = as.integer(df_train$consumo_semanal_snacks_num)
+df_train$consumo_semanal_comida_grasa = as.integer(df_train$consumo_semanal_comida_grasa)
+```
+
+
+## Variable índice de consumo saludable
+```{r}
+df_train[,"indice_consumo_saludable"] = (df_train$consumo_semanal_frutas + df_train$consumo_semanal_verdura) / (df_train$dias_consumo_comida_rapida + df_train$consumo_diario_alcohol + df_train$consumo_semanal_gaseosas + df_train$consumo_semanal_snacks + df_train$consumo_semanal_comida_grasa )
+```
+
+## Variable índice de actividad saludable
+```{r}
+df_train[,"indice_actividad_saludable"] = df_train[, 'dias_actividad_fisica_semanal'] / df_train[, 'indice_consumo_saludable']
+```
+
+```{r}
+combinations_columns = combn(names(subset(df_train, select = -c(genero, peso))), 2, simplify = FALSE, )
+
+for(comb in combinations_columns){
+  df_train[, paste(comb[1], "_", comb[2], "ratio")] = df_train[, comb[1]] / df_train[, comb[2]]
+  df_train[, paste(comb[1], "_", comb[2], "ratio")] = df_train[, comb[1]] / df_train[, comb[2]]
+  
+  for (i in 2:4){
+    df_train[, paste(comb[1], "_power_", i)] = df_train[, comb[1]] ** i
+  }
+}
+```
+
+```{r}
+df_train = do.call(data.frame,                     
+                   lapply(df_train,
+                          function(x) replace(x, is.infinite(x), 0)))
+```
+
+```{r}
+df_train = do.call(data.frame,                     
+                   lapply(df_train,
+                          function(x) replace(x, is.na(x), 0.01)))
+```
+
+
+```{r}
+modelo_peso_3 = lm(formula=peso ~ .,
+                   data = subset(df_train, select = -c(dias_actividad_fisica_semanal._.indice_consumo_saludable.ratio,
+                                     dias_actividad_fisica_semanal._.indice_actividad_saludable.ratio,
+                                     consumo_semanal_verdura._.indice_consumo_saludable.ratio)))
+
+tidy_modelo_peso_3 = tidy(modelo_peso_3, conf.int=TRUE)
+
+tidy_modelo_peso_3
+```
+
+```{r}
+summary(modelo_peso_3)
+```
+
+```{r}
+c = names(modelo_peso_3$coefficients[summary(modelo_peso_3)$coefficients[,4] < 0.1])
+c[1] = "genero"
+```
+
+```{r}
+c = append(c, "peso")
+```
+
+
+## Segundo modelo usando únicamente variables con p-value mayor a 0.1 del primer modelo.
+```{r}
+modelo_peso_4 = lm(formula=peso ~ .,
+                   data = subset(df_train, 
+                                 select = c))
+
+tidy_modelo_peso_4 = tidy(modelo_peso_4, conf.int=TRUE)
+
+tidy_modelo_peso_4
+
+```
+
+```{r}
+summary(modelo_peso_4)
 ```
 
 
 
+```{r}
+df_test = read.csv('encuesta_salud_test.csv')
+```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+```{r}
+df_test = df_test %>%
+  filter(frecuencia_hambre_mensual != "Dato perdido",
+         nivel_educativo != "Dato perdido",
+         consumo_semanal_frutas != "Dato perdido",
+         consumo_semanal_verdura != "Dato perdido",
+         consumo_semanal_comida_grasa != "Dato perdido",
+         consumo_semanal_gaseosas != "Dato perdido",
+         consumo_semanal_snacks != "Dato perdido")
+```
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+```{r}
+df_test[df_test$frecuencia_hambre_mensual == "Nunca", "frecuencia_hambre_mensual"] = 1
+df_test[df_test$frecuencia_hambre_mensual == "Rara vez", "frecuencia_hambre_mensual"] = 2
+df_test[df_test$frecuencia_hambre_mensual == "Algunas veces", "frecuencia_hambre_mensual"] = 3
+df_test[df_test$frecuencia_hambre_mensual == "Casi siempre", "frecuencia_hambre_mensual"] = 4
+df_test[df_test$frecuencia_hambre_mensual == "Siempre", "frecuencia_hambre_mensual"] = 5
+```
+
+## Variable años consumiendo alcohol
+```{r}
+df_test[df_test$edad_consumo_alcohol == '10 o 11 años', 'tiempo_consumiendo_alcohol'] = df_test[df_test$edad_consumo_alcohol == '10 o 11 años', 'edad'] - 10.5
+df_test[df_test$edad_consumo_alcohol == '12 o 13 años', 'tiempo_consumiendo_alcohol'] = df_test[df_test$edad_consumo_alcohol == '12 o 13 años', 'edad'] - 12.5
+df_test[df_test$edad_consumo_alcohol == '14 o 15 años', 'tiempo_consumiendo_alcohol'] = df_test[df_test$edad_consumo_alcohol == '14 o 15 años', 'edad'] - 14.5
+df_test[df_test$edad_consumo_alcohol == '16 o 17 años', 'tiempo_consumiendo_alcohol'] = df_test[df_test$edad_consumo_alcohol == '16 o 17 años', 'edad'] - 16.5
+df_test[df_test$edad_consumo_alcohol == '7 años o menos', 'tiempo_consumiendo_alcohol'] = df_test[df_test$edad_consumo_alcohol == '7 años o menos', 'edad'] - 3.5
+df_test[df_test$edad_consumo_alcohol == '8 o 9 años', 'tiempo_consumiendo_alcohol'] = df_test[df_test$edad_consumo_alcohol == '8 o 9 años', 'edad'] - 8.5
+df_test[df_test$edad_consumo_alcohol == 'Nunca tomé alcohol más que unos pocos sorbos', 'tiempo_consumiendo_alcohol'] = 1
+```
+
+```{r}
+df_test <- subset(df_test, select = -c(edad_consumo_alcohol, record))
+```
+
+```{r}
+df_test[df_test$nivel_educativo == '8vo grado nivel Primario/Polimodal  o 1er año nivel Secundario', 'nivel_educativo'] = 1
+df_test[df_test$nivel_educativo == '9no grado nivel Primario/Polimodal o 2do año nivel Secundario', 'nivel_educativo'] = 2
+df_test[df_test$nivel_educativo == '1er año/10mo grado nivel Polimodal o 3er año nivel Secundario', 'nivel_educativo'] = 3
+df_test[df_test$nivel_educativo == '2do año/11vo grado nivel Polimodal o 4to año nivel Secundario', 'nivel_educativo'] = 4
+df_test[df_test$nivel_educativo == '3er año/12vo grado nivel Polimodal o 5to año nivel Secundario', 'nivel_educativo'] = 5
+```
+
+```{r}
+df_test[df_test$consumo_semanal_frutas == 'No comí frutas durante los últimos 7 días', 'consumo_semanal_frutas'] = 1
+df_test[df_test$consumo_semanal_frutas == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_frutas'] = 2
+df_test[df_test$consumo_semanal_frutas == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_frutas'] = 3
+df_test[df_test$consumo_semanal_frutas == '1 vez al día', 'consumo_semanal_frutas'] = 4
+df_test[df_test$consumo_semanal_frutas == '2 veces al día', 'consumo_semanal_frutas'] = 5
+df_test[df_test$consumo_semanal_frutas == '3 veces al día', 'consumo_semanal_frutas'] = 6
+df_test[df_test$consumo_semanal_frutas == '4 o más veces al día', 'consumo_semanal_frutas'] = 7
+```
+
+```{r}
+df_test[df_test$consumo_semanal_verdura == 'No comí verduras ni hortalizas durante los últimos 7 días', 'consumo_semanal_verdura'] = 1
+df_test[df_test$consumo_semanal_verdura == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_verdura'] = 2
+df_test[df_test$consumo_semanal_verdura == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_verdura'] = 3
+df_test[df_test$consumo_semanal_verdura == '1 vez al día', 'consumo_semanal_verdura'] = 4
+df_test[df_test$consumo_semanal_verdura == '2 veces al día', 'consumo_semanal_verdura'] = 5
+df_test[df_test$consumo_semanal_verdura == '3 veces al día', 'consumo_semanal_verdura'] = 6
+df_test[df_test$consumo_semanal_verdura == '4 o más veces al día', 'consumo_semanal_verdura'] = 7
+```
+
+```{r}
+df_test[df_test$consumo_semanal_comida_grasa == 'No comí comida alta en grasa en los últimos 7 días', 'consumo_semanal_comida_grasa'] = 1
+df_test[df_test$consumo_semanal_comida_grasa == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_comida_grasa'] = 2
+df_test[df_test$consumo_semanal_comida_grasa == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_comida_grasa'] = 3
+df_test[df_test$consumo_semanal_comida_grasa == '1 vez al día', 'consumo_semanal_comida_grasa'] = 4
+df_test[df_test$consumo_semanal_comida_grasa == '2 veces al día', 'consumo_semanal_comida_grasa'] = 5
+df_test[df_test$consumo_semanal_comida_grasa == '3 veces al día', 'consumo_semanal_comida_grasa'] = 6
+df_test[df_test$consumo_semanal_comida_grasa == '4 o más veces al día', 'consumo_semanal_comida_grasa'] = 7
+```
+
+```{r}
+df_test[df_test$consumo_semanal_gaseosas == 'No tomé gaseosas en los últimos 7 días', 'consumo_semanal_gaseosas'] = 1
+df_test[df_test$consumo_semanal_gaseosas == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_gaseosas'] = 2
+df_test[df_test$consumo_semanal_gaseosas == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_gaseosas'] = 3
+df_test[df_test$consumo_semanal_gaseosas == '1 vez al día', 'consumo_semanal_gaseosas'] = 4
+df_test[df_test$consumo_semanal_gaseosas == '2 veces al día', 'consumo_semanal_gaseosas'] = 5
+df_test[df_test$consumo_semanal_gaseosas == '3 veces al día', 'consumo_semanal_gaseosas'] = 6
+df_test[df_test$consumo_semanal_gaseosas == '4 o más veces al día', 'consumo_semanal_gaseosas'] = 7
+```
+
+
+```{r}
+
+df_test[df_test$consumo_semanal_snacks == 'No comí comida salada o snacks en los últimos 7 días', 'consumo_semanal_snacks_num'] = 1
+df_test[df_test$consumo_semanal_snacks == '4 a 6 veces durante los últimos 7 días', 'consumo_semanal_snacks_num'] = 2
+df_test[df_test$consumo_semanal_snacks == '1 a 3 veces durante los últimos 7 días', 'consumo_semanal_snacks_num'] = 3
+df_test[df_test$consumo_semanal_snacks == '1 vez al día', 'consumo_semanal_snacks_num'] = 4
+df_test[df_test$consumo_semanal_snacks == '2 veces al día', 'consumo_semanal_snacks_num'] = 5
+df_test[df_test$consumo_semanal_snacks == '3 veces al día', 'consumo_semanal_snacks_num'] = 6
+df_test[df_test$consumo_semanal_snacks == '4 o más veces al día', 'consumo_semanal_snacks_num'] = 7
+```
+
+```{r}
+df_test$nivel_educativo = as.integer(df_test$nivel_educativo)
+df_test$frecuencia_hambre_mensual = as.integer(df_test$frecuencia_hambre_mensual)
+df_test$consumo_semanal_frutas = as.integer(df_test$consumo_semanal_frutas)
+df_test$consumo_semanal_verdura = as.integer(df_test$consumo_semanal_verdura)
+df_test$consumo_semanal_gaseosas = as.integer(df_test$consumo_semanal_gaseosas)
+df_test$consumo_semanal_snacks_num = as.integer(df_test$consumo_semanal_snacks_num)
+df_test$consumo_semanal_comida_grasa = as.integer(df_test$consumo_semanal_comida_grasa)
+```
+
+```{r}
+str(df_test)
+```
+
+```{r}
+table(df_test$dias_consumo_comida_rapida)
+```
+
+## Variable índice de consumo saludable
+```{r}
+df_test[,"indice_consumo_saludable"] = (df_test$consumo_semanal_frutas + df_test$consumo_semanal_verdura) / (df_test$dias_consumo_comida_rapida + df_test$consumo_diario_alcohol + df_test$consumo_semanal_gaseosas + df_test$consumo_semanal_snacks_num + df_test$consumo_semanal_comida_grasa )
+```
+
+## Variable índice de actividad saludable
+```{r}
+df_test[,"indice_actividad_saludable"] = df_test[, 'dias_actividad_fisica_semanal'] / df_test[, 'indice_consumo_saludable']
+```
+
+
+```{r}
+combinations_columns = combn(names(subset(df_test, select = -c(genero, peso, consumo_semanal_snacks))), 2, simplify = FALSE)
+
+for(comb in combinations_columns){
+  df_test[, paste(comb[1], "_", comb[2], "ratio")] = df_test[, comb[1]] / df_test[, comb[2]]
+  for (i in 2:4){
+    df_test[, paste(comb[1], "_power_", i)] = df_test[, comb[1]] ** i
+  }
+}
+```
+
+```{r}
+df_test = do.call(data.frame,                     
+                   lapply(df_test,
+                          function(x) replace(x, is.infinite(x), 0)))
+```
+
+```{r}
+df_test = do.call(data.frame,                     
+                   lapply(df_test,
+                          function(x) replace(x, is.na(x), 0.01)))
+```
+
+
+```{r}
+df_test[df_test$consumo_semanal_snacks == "No comí comida salada o snacks en los últimos 7 días", "consumo_semanal_snacks"] = "basal"
+```
+
+
+```{r}
+pred_modelo_1 = predict(modelo_peso, df_test)
+pred_modelo_2 = predict(modelo_peso_2, df_test)
+pred_modelo_3 = predict(modelo_peso_3, df_test)
+pred_modelo_4 = predict(modelo_peso_4, df_test)
+```
+
+```{r}
+R2(pred_modelo_1, df_test$peso)
+MAE(pred_modelo_1, df_test$peso)
+RMSE(pred_modelo_1, df_test$peso)
+```
+
+```{r}
+R2(pred_modelo_2, df_test$peso)
+MAE(pred_modelo_2, df_test$peso)
+RMSE(pred_modelo_2, df_test$peso)
+```
+
+```{r}
+R2(pred_modelo_3, df_test$peso)
+MAE(pred_modelo_3, df_test$peso)
+RMSE(pred_modelo_3, df_test$peso)
+```
+
+```{r}
+R2(pred_modelo_4, df_test$peso)
+MAE(pred_modelo_4, df_test$peso)
+RMSE(pred_modelo_4, df_test$peso)
+```
+Si bien en el set de training el modelo 3 obtiene mayor $R^{2}$, no es así en el set de testing.
+El mejor modelo para predecir el peso en el set de testing es el modelo 2 ya que tiene mayor $R^{2}$ y menor MAE, RMSE.
+
+# Diagnóstico del modelo
+
+```{r}
+plot(modelo_peso)
+```
+## En el gráfico de residuos vs valores predichos se puede apreciar una leve curvatura.
+## En el gráfico normal qqplot podemos ver que el extremo superior no se ajust a la distribución teórica.
+## Vemos que se destacan 3 valores con leverage alto.
+
+
+# Modelo Robusto
+
+```{r}
+df_outliers = read.csv('encuesta_salud_modelo6.csv')
+```
+
+
+```{r}
+modelo_peso_5 = lm(formula=peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+                   data = df_outliers)
+
+tidy_modelo_peso_5 = tidy(modelo_peso_5, conf.int=TRUE)
+
+tidy_modelo_peso_5
+```
+
+
+```{r}
+summary(modelo_peso_5)
+```
+```{r}
+pred_modelo_5 = augment(modelo_peso_5, newdata = df_test) 
+```
+
+```{r}
+rmse(data=pred_modelo_5, truth = peso, estimate=.fitted)
+mae(data=pred_modelo_5, truth= peso, estimate=.fitted)
+```
+
+
+```{r}
+modelo_peso_6 = lmrob(formula=peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+                      data = df_outliers)
+```
+
+
+```{r}
+summary(modelo_peso_6)
+```
+Se puede ver un descenso en el $R^{2}$ del modelo inicial con el set de datos de entrenamiento que contiene valores outliers.
+
+
+```{r}
+pred_modelo_6 = augment(modelo_peso_6, newdata = df_test) 
+```
+
+```{r}
+rmse(data=pred_modelo_6, truth = peso, estimate=.fitted)
+mae(data=pred_modelo_6, truth= peso, estimate=.fitted)
+```
+
+Sin embargo, no se notan diferencias en las métricas de error $RMSE$ y $MAE$ en el set de datos de testeo.
